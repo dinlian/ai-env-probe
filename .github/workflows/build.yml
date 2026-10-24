@@ -1,0 +1,61 @@
+name: Build Cross-Platform Releases
+
+on:
+  workflow_dispatch: # 允许在网页上手动点击运行
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: windows
+          - os: macos-latest
+            artifact_name: macos
+          - os: ubuntu-latest
+            artifact_name: linux
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          pyinstaller --onedir --console --name ai-env-probe --add-data "probe.py;." --add-data "profiles;profiles" --add-data "common.py;." --add-data "hardware.py;." --add-data "recommend.py;." --add-data "solution.py;." --add-data "LICENSE;." --add-data "THIRD_PARTY_NOTICES.md;." --clean launcher.py
+
+      - name: Build (Mac/Linux)
+        if: matrix.os == 'macos-latest' || matrix.os == 'ubuntu-latest'
+        run: |
+          pyinstaller --onedir --console --name ai-env-probe --add-data "probe.py:." --add-data "profiles:profiles" --add-data "common.py:." --add-data "hardware.py:." --add-data "recommend.py:." --add-data "solution.py:." --add-data "LICENSE:." --add-data "THIRD_PARTY_NOTICES.md:." --clean launcher.py
+
+      - name: Compress ZIP (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cd dist
+          powershell Compress-Archive -Path ai-env-probe -DestinationPath ../ai-env-probe-1.0.0-windows.zip
+
+      - name: Compress ZIP (Mac/Linux)
+        if: matrix.os == 'macos-latest' || matrix.os == 'ubuntu-latest'
+        run: |
+          cd dist
+          zip -r ../ai-env-probe-1.0.0-${{ matrix.artifact_name }}.zip ai-env-probe/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-env-probe-${{ matrix.artifact_name }}
+          path: ai-env-probe-*.zip
