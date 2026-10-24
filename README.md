@@ -5,8 +5,6 @@
 > recommends the correct CUDA build, and generates step-by-step fix plans.
 >
 > No Python installation required if you download the packaged release.
->
-> 中文文档见下方。For full documentation in Chinese, see below.
 
 ---
 
@@ -36,14 +34,13 @@
 
 ### 方式一：打包版（小白用户推荐）
 
-1. 到 [Releases](../../releases) 页面下载对应系统的压缩包
+1. 到 [Releases](https://gitee.com/dinlian_1/ai-env-probe/releases) 页面下载对应系统的压缩包
 2. 解压到任意目录
-3. 双击可执行文件
+3. 双击运行（Windows 为 `ai-env-probe.exe`，macOS/Linux 为 `ai-env-probe`）
 
 **不需要安装 Python**。如果工具放在 ComfyUI 根目录（与 `main.py` 同级），会自动找到 ComfyUI 的解释器做完整检测；如果不在，会做硬件预检并提示下一步。
 
-Windows 首次运行可能被 SmartScreen 拦截，点击「更多信息 → 仍要运行」。
-macOS 首次运行需右键 → 打开，或执行 `xattr -d com.apple.quarantine <文件名>`。
+> ⚠️ **安全提示**：Windows 首次运行可能被 SmartScreen 拦截，点击「更多信息 → 仍要运行」。macOS 首次运行需右键 → 打开，或执行 `xattr -d com.apple.quarantine <文件名>`。
 
 ### 方式二：源码 + 启动脚本（已有 ComfyUI 的用户）
 
@@ -68,4 +65,4 @@ python launcher.py --python /path/to/python --profile comfyui
 python launcher.py --json > report.json
 
 # 列出所有可用 profile
-python3 launcher.py --list-profiles
+python launcher.py --list-profiles

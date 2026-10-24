@@ -20,7 +20,13 @@ import argparse
 import platform
 import subprocess
 
+# 强制 Windows 终端使用 UTF-8 编码，防止中文和 Emoji 乱码
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from common import (
     TOOL_NAME, VERSION, COPYRIGHT, LICENSE, BANNER,
     auto_detect_profile_id, get_resource_dir, _looks_like_target_app,
@@ -477,4 +483,11 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    exit_code = main()
+    # 如果是打包的 exe，且不是 JSON 输出模式，则暂停等待用户按回车
+    if getattr(sys, "frozen", False) and "--json" not in sys.argv and "--quiet" not in sys.argv:
+        try:
+            input("\n检测完毕，按回车键退出...")
+        except EOFError:
+            pass
+    sys.exit(exit_code)
