@@ -11,6 +11,7 @@ Licensed under the MIT License. See LICENSE file for details.
 不链接、不复制、不重新分发目标应用的任何代码。
 
 流程：探测硬件 → 推荐版本 → 定位目标解释器 → 调用 probe.py → 诊断输出 → 生成修复方案
+未找到目标解释器时，自动降级为“硬件预检”模式，只输出硬件信息和安装建议。
 """
 
 import os
@@ -57,16 +58,6 @@ def fix(msg): print(f"  🔧 修复: {msg}")
 # ============================================================
 
 def find_python(base_dir=None, explicit_python=None):
-    """优先级：
-    1. --python 显式指定
-    2. base_dir 下的专用解释器（python_embeded / venv / .venv）
-    3. sys.executable（仅源码模式、非启动器模式、能 import torch 且 base_dir 像目标应用）
-    4. cwd 下的专用解释器
-    5. 系统 python3 / python
-
-    AI_ENV_PROBE_LAUNCHER=1 时跳过第 3 步，避免便携 Python / 打包启动器
-    被误当成目标环境。打包模式下由 main() 自动设置该变量。
-    """
     if explicit_python and os.path.isfile(explicit_python):
         return explicit_python
 
@@ -89,12 +80,10 @@ def find_python(base_dir=None, explicit_python=None):
                 return c
         return None
 
-    # 2. base_dir 下的专用解释器
     found = _search(base_dir)
     if found:
         return found
 
-    # 3. sys.executable（仅源码模式、非启动器模式、且 base_dir 像目标应用）
     if not getattr(sys, "frozen", False) and not launcher_mode:
         if _looks_like_target_app(base_dir):
             try:
@@ -103,14 +92,12 @@ def find_python(base_dir=None, explicit_python=None):
             except Exception:
                 pass
 
-    # 4. cwd 下的专用解释器
     cwd = os.getcwd()
     if cwd != base_dir:
         found = _search(cwd)
         if found:
             return found
 
-    # 5. 系统 python
     for cmd in ["python3", "python"]:
         try:
             subprocess.check_output([cmd, "--version"], stderr=subprocess.DEVNULL)
@@ -155,7 +142,7 @@ def run_probe(target_python, profile, base_dir, quiet=False):
 
 
 # ============================================================
-# 健康判断（env_issues 负责静态项，本函数补充动态项）
+# 健康判断
 # ============================================================
 
 def is_healthy(backend, probe):
@@ -173,37 +160,136 @@ def is_healthy(backend, probe):
     elif backend.startswith("Apple MPS"):
         if not probe.get("mps_available"):
             return False
-    # CPU 分支、AMD Windows 分支：env_issues 为空即视为健康
     return True
 
 
 # ============================================================
-# 列出 profiles
+# 快速结论（深度修复：加入加速环境状态判断）
 # ============================================================
 
-def list_profiles():
-    profiles_dir = os.path.join(get_resource_dir(), "profiles")
-    if not os.path.isdir(profiles_dir):
-        print(f"profiles 目录不存在: {profiles_dir}")
-        return 1
-    print(f"\n可用检测配置（{profiles_dir}）:\n")
-    for f in sorted(os.listdir(profiles_dir)):
-        if f.endswith(".json"):
-            path = os.path.join(profiles_dir, f)
-            try:
-                with open(path, encoding="utf-8") as fh:
-                    data = json.load(fh)
-                name = data.get("name", f[:-5])
-                pid = f[:-5]
-                print(f"  {pid:<12}  {name}")
-            except Exception:
-                print(f"  {f[:-5]:<12}  （解析失败）")
+def _gpu_summary(hardware):
+    if hardware["nvidia"]:
+        g = pick_primary(hardware["nvidia"])
+        return g["name"], g["vram_gb"]
+    if hardware["mac_gpu"]:
+        m = hardware["mac_gpu"]
+        return m["name"], m.get("vram_gb")
+    if hardware["amd"]:
+        g = pick_primary(hardware["amd"])
+        return f"AMD {g['name']}", g.get("vram_gb")
+    if hardware["intel"]["type"] == "arc":
+        return f"Intel {hardware['intel']['name']}", None
+    if hardware["intel"]["type"] == "igpu":
+        return f"Intel 核显 {hardware['intel']['name']}", None
+    return "未检测到独立 GPU", None
+
+
+def _can_run_ai(hardware, recommended):
+    backend = recommended["backend"]
+    vram = primary_vram(hardware)
+
+    if backend == "CPU":
+        return "warn", "无可用 GPU，只能 CPU 模式运行，速度极慢"
+    if backend == "AMD (unsupported)":
+        return "no", "该 AMD 架构 ROCm 支持极差，基本无法使用"
+    if backend == "AMD Windows (limited)":
+        return "warn", "Windows 下 AMD 支持有限，建议切换 Linux + ROCm"
+    if backend == "Intel iGPU (XPU 可选)":
+        return "warn", "Intel 核显 XPU 加速有限，建议 CPU 模式或 OpenVINO"
+    if recommended.get("severity") == "err":
+        return "no", recommended["note"]
+
+    if vram is None:
+        return "yes", "GPU 可用"
+    if vram < 4:
+        return "no", f"显存 {vram} GB 过低，无法运行"
+    if vram < 8:
+        return "warn", f"显存 {vram} GB 偏小，只能跑 SD1.5 或量化模型"
+    if vram < 16:
+        return "yes", f"显存 {vram} GB，可运行 SDXL 和多数视频模型"
+    return "yes", f"显存 {vram} GB，可流畅运行 SDXL、FLUX FP8 和多数视频模型"
+
+
+def render_quick_conclusion(hardware, recommended, has_torch):
+    gpu_name, vram = _gpu_summary(hardware)
+    status, reason = _can_run_ai(hardware, recommended)
+
+    icon = {"yes": "✅", "warn": "⚠️", "no": "❌"}[status]
+    label = {"yes": "硬件支持运行 AI 应用",
+             "warn": "硬件可以运行，但有注意事项",
+             "no": "不推荐在此设备运行 AI"}[status]
+
+    section("快速结论")
     print()
-    return 0
+    print(f"  🖥️  你的显卡: {gpu_name}" + (f"  ({vram} GB 显存)" if vram else ""))
+    print(f"  {icon}  {label}")
+    
+    # 👇 核心修复：在第一眼展示加速环境状态
+    if has_torch:
+        print(f"  ✅ 加速环境: 已安装 (PyTorch)")
+    else:
+        print(f"  ❌ 加速环境: 未安装或不可用")
+        
+    print(f"  💡  推荐版本: {recommended.get('cuda_tag') or recommended['backend']}")
+    print(f"  📝  说明: {reason}")
+    print()
 
 
 # ============================================================
-# 人类可读输出
+# 硬件预检模式（找不到目标环境时）
+# ============================================================
+
+def render_hardware_only(hardware, recommended, vram, base_dir):
+    section("硬件预检结果")
+    print()
+
+    looks_like = _looks_like_target_app(base_dir)
+
+    if looks_like:
+        print("  ⚠️  当前目录看起来是目标应用，但未找到可用的 Python 解释器。")
+        print("     这通常意味着你的环境未安装完整，或者 Python 路径已损坏。")
+        print()
+    else:
+        print("  未找到 ComfyUI / Stable Diffusion / vLLM 等目标应用。")
+        print("  以下仅输出硬件信息和安装建议。")
+        print()
+
+    tag = recommended.get("cuda_tag") or recommended["backend"]
+    
+    print("  🔍 显卡加速环境（PyTorch）状态: ❌ 未检测到（或未安装）")
+    print(f"  💡 你的显卡推荐安装版本: {tag}")
+    print(f"     说明: {recommended.get('note', '')}")
+    print()
+
+    if recommended.get("pip_cmd"):
+        print("  📦 如果你已有 Python 环境，可运行以下命令手动安装：")
+        print(f"     {recommended['pip_cmd']}")
+        print()
+
+    adv = vram_advice(vram, "generic")
+    if adv["image"]:
+        print("  🖼️  图片生成建议:")
+        for line in adv["image"]:
+            print(f"    • {line}")
+        print()
+    if adv["video"]:
+        print("  🎬  视频生成建议:")
+        for line in adv["video"]:
+            print(f"    • {line}")
+        print()
+
+    if not looks_like:
+        print("  📝  小白操作指南:")
+        print("     如果你还没安装 ComfyUI，强烈建议直接下载带环境的官方一键整合包：")
+        print("        https://www.comfy.org/download")
+        print("     （整合包内已经包含了 Python、PyTorch 和显卡加速，无需自己配置）")
+        print("     下载完成后，把本工具放到 ComfyUI 根目录（与 main.py 同级），")
+        print("     再次双击运行，即可自动检测环境是否完整。")
+        print()
+
+
+# ============================================================
+# 详细输出
 # ============================================================
 
 def render_hardware(hardware, quiet=False):
@@ -362,11 +448,35 @@ def render_summary(recommended, probe, healthy, plan, vram, quiet=False):
 
 
 # ============================================================
+# 列出 profiles
+# ============================================================
+
+def list_profiles():
+    profiles_dir = os.path.join(get_resource_dir(), "profiles")
+    if not os.path.isdir(profiles_dir):
+        print(f"profiles 目录不存在: {profiles_dir}")
+        return 1
+    print(f"\n可用检测配置（{profiles_dir}）:\n")
+    for f in sorted(os.listdir(profiles_dir)):
+        if f.endswith(".json"):
+            path = os.path.join(profiles_dir, f)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                name = data.get("name", f[:-5])
+                pid = f[:-5]
+                print(f"  {pid:<12}  {name}")
+            except Exception:
+                print(f"  {f[:-5]:<12}  （解析失败）")
+    print()
+    return 0
+
+
+# ============================================================
 # 主流程
 # ============================================================
 
 def main():
-    # 打包模式下强制标记启动器身份，避免 sys.executable 被当成目标环境
     if getattr(sys, "frozen", False):
         os.environ["AI_ENV_PROBE_LAUNCHER"] = "1"
 
@@ -393,23 +503,58 @@ def main():
 
     # ---------- 1. 硬件探测 ----------
     hardware = detect_all(os_name)
-    render_hardware(hardware, quiet)
+    vram = primary_vram(hardware)
 
-    # ---------- 2. 定位解释器 + 版本推荐 ----------
+    # ---------- 2. 定位解释器 + 推荐 ----------
     target_python = find_python(base_dir, args.python)
+    recommended = recommend(hardware, target_python)
+
+    # ---------- 3. 快速结论 ----------
+    if not quiet:
+        # 快速判断一下目标环境有没有装 torch（为了在结论里显示）
+        has_torch_hint = False
+        if target_python:
+            try:
+                res = subprocess.run(
+                    [target_python, "-c", "import torch"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5
+                )
+                has_torch_hint = (res.returncode == 0)
+            except Exception:
+                has_torch_hint = False
+        render_quick_conclusion(hardware, recommended, has_torch_hint)
+
+    # ---------- 4. 硬件预检模式（找不到目标环境） ----------
     if not target_python:
         if args.json:
-            print(json.dumps({
-                "tool": TOOL_NAME, "version": VERSION,
-                "error": "未找到可用的 Python 解释器",
-            }, ensure_ascii=False))
-        else:
-            section("2. 定位目标解释器")
-            err("未找到可用的 Python 解释器")
-            fix("请用 --python 指定目标解释器")
-        return 1
+            final = {
+                "tool": TOOL_NAME,
+                "version": VERSION,
+                "copyright": COPYRIGHT,
+                "mode": "hardware_only",
+                "hardware": {
+                    "os": os_name,
+                    "nvidia": hardware["nvidia"],
+                    "amd": hardware["amd"],
+                    "mac_gpu": hardware["mac_gpu"],
+                    "intel": hardware["intel"],
+                    "vram_gb": vram,
+                },
+                "recommended": recommended,
+                "vram_advice": vram_advice(vram, "generic"),
+                "message": "未找到目标应用的解释器，仅输出硬件预检结果",
+            }
+            print(json.dumps(final, ensure_ascii=False, indent=2))
+            return 0
+        render_hardware_only(hardware, recommended, vram, base_dir)
+        if not args.quiet:
+            print("-" * 62)
+            print(f"  {COPYRIGHT}  |  {LICENSE} License  |  v{VERSION}")
+        print()
+        return 0
 
-    recommended = recommend(hardware, target_python)
+    # ---------- 5. 完整检测模式 ----------
+    render_hardware(hardware, quiet)
     render_recommend(recommended, quiet)
 
     if not quiet:
@@ -423,7 +568,6 @@ def main():
         else:
             info(f"检测配置: {args.profile}")
 
-    # ---------- 3. 调用 probe ----------
     probe = run_probe(target_python, args.profile, base_dir, quiet)
     if probe is None:
         if args.json:
@@ -437,21 +581,18 @@ def main():
     profile_id = profile_meta.get("id", "generic")
     render_probe(probe, profile_meta, quiet)
 
-    # ---------- 4. 显存建议 ----------
-    vram = primary_vram(hardware)
     adv = vram_advice(vram, profile_id)
     render_vram(adv, vram, quiet)
 
-    # ---------- 5. 健康判断 + 修复方案 ----------
     healthy = is_healthy(recommended["backend"], probe)
     plan = build_solution_plan(recommended, probe, hardware, target_python, base_dir)
 
-    # ---------- 6. 汇总 ----------
     if args.json:
         final = {
             "tool": TOOL_NAME,
             "version": VERSION,
             "copyright": COPYRIGHT,
+            "mode": "full",
             "hardware": {
                 "os": os_name,
                 "nvidia": hardware["nvidia"],
@@ -484,7 +625,6 @@ def main():
 
 if __name__ == "__main__":
     exit_code = main()
-    # 如果是打包的 exe，且不是 JSON 输出模式，则暂停等待用户按回车
     if getattr(sys, "frozen", False) and "--json" not in sys.argv and "--quiet" not in sys.argv:
         try:
             input("\n检测完毕，按回车键退出...")
