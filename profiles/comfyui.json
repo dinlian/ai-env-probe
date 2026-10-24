@@ -1,0 +1,39 @@
+{
+  "name": "ComfyUI (第三方检测)",
+  "core": {
+    "comfyui-frontend-package": {"min": "1.57.1"},
+    "comfyui-workflow-templates": {"min": "0.11.96"},
+    "comfyui-embedded-docs": {"min": "0.5.14"},
+    "numpy": {"min": "1.25.0"},
+    "einops": {},
+    "transformers": {"min": "4.50.3"},
+    "tokenizers": {"min": "0.13.3"},
+    "sentencepiece": {},
+    "safetensors": {"min": "0.4.2"},
+    "aiohttp": {"min": "3.11.8"},
+    "yarl": {"min": "1.18.0"},
+    "pyyaml": {},
+    "Pillow": {"min": "10.1.0"},
+    "scipy": {},
+    "tqdm": {},
+    "psutil": {},
+    "alembic": {},
+    "SQLAlchemy": {"min": "2.0.0"},
+    "filelock": {},
+    "av": {"min": "17.0.0"},
+    "comfy-aimdo": {"min": "0.6.0"},
+    "comfy-kitchen": {"min": "0.2.40"},
+    "requests": {},
+    "simpleeval": {"min": "1.0.0"},
+    "blake3": {},
+    "torchsde": {}
+  },
+  "extra": {
+    "kornia": {"min": "0.7.1"},
+    "spandrel": {},
+    "pydantic": {"min": "2.0"},
+    "pydantic-settings": {"min": "2.0"},
+    "PyOpenGL": {"min": "3.1.8"},
+    "comfy-angle": {}
+  }
+}

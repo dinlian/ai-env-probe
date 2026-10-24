@@ -1,0 +1,19 @@
+{
+  "name": "Stable Diffusion WebUI (第三方检测)",
+  "core": {
+    "numpy": {"min": "1.23.0"},
+    "Pillow": {"min": "9.5.0"},
+    "gradio": {"min": "3.41.0"},
+    "safetensors": {"min": "0.3.1"},
+    "transformers": {"min": "4.30.0"},
+    "accelerate": {"min": "0.21.0"},
+    "fastapi": {}
+  },
+  "extra": {
+    "diffusers": {},
+    "kornia": {},
+    "open_clip_torch": {},
+    "xformers": {},
+    "pydantic": {}
+  }
+}

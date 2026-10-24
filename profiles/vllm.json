@@ -1,0 +1,18 @@
+{
+  "name": "vLLM (第三方检测)",
+  "core": {
+    "vllm": {"min": "0.4.0"},
+    "transformers": {"min": "4.40.0"},
+    "tokenizers": {"min": "0.19.0"},
+    "numpy": {"min": "1.24.0"},
+    "pydantic": {"min": "2.0"},
+    "fastapi": {},
+    "uvicorn": {}
+  },
+  "extra": {
+    "xformers": {},
+    "ray": {},
+    "outlines": {},
+    "flash-attn": {}
+  }
+}

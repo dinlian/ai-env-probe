@@ -1,0 +1,12 @@
+{
+  "name": "通用 PyTorch 环境",
+  "core": {
+    "numpy": {"min": "1.20.0"}
+  },
+  "extra": {
+    "transformers": {},
+    "diffusers": {},
+    "accelerate": {},
+    "safetensors": {}
+  }
+}
